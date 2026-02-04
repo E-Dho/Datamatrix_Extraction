@@ -177,6 +177,8 @@ int mpshrink = NO ;
 int dotpopsmode = NO;
 int noxdata = YES;              /* default as pop structure dubious if Males and females */
 int fstonly = NO;
+int xtxonly = NO;              // If YES, only write XTX matrix and exit
+int xonly = NO;                // If YES, only write X matrix and exit
 int fstjack = YES ;
 int pcorrmode = NO;
 int pcpopsonly = YES;
@@ -247,6 +249,8 @@ char *genooutfilename = NULL;
 char *omode = "packedancestrymap";
 char *grmoutname = NULL;
 int grmbinary = NO;
+char *xtxoutname = NULL;       // Output file for XTX matrix
+char *xoutname = NULL;         // Output file for X matrix
 double blgsize = 0.05;          // block size in Morgans */
 char *id2pops = NULL;
 char *elllistname = NULL ; 
@@ -386,6 +390,10 @@ void fixwt (SNP ** snpm, int nsnp, double val);
 void sqz (double *azq, double *acoeffs, int numeigs, int nrows, int *xindex);
 void dumpgrm (double *XTX, int *xindex, int nrows, int numsnps,
               Indiv ** indivmarkers, int numindivs, char *grmoutname);
+void dumpxtx (double *XTX, int *xindex, int nrows, Indiv ** indivmarkers,
+              int numindivs, char *xtxoutname);
+void dumpx (double *X, int *xindex, int nrows, int ncols, 
+            Indiv ** indivmarkers, SNP ** xsnplist, char *xoutname);
 
 void printevecs (SNP ** snpmarkers, Indiv ** indivmarkers, Indiv ** xindlist,
                  int numindivs, int ncols, int nrows,
@@ -711,6 +719,28 @@ main (int argc, char **argv)
     fastmode = NO ;
   }
 
+  if (xtxonly) {
+    printf ("xtxonly mode: will write XTX matrix and exit\n");
+    numeigs = 0;
+    numoutliter = 1;  // At least one iteration to compute XTX
+    numoutiter = 1;  // Only one iteration, no outlier removal
+    outputname = NULL;
+    snpeigname = NULL;
+    if (fastmode) printf("*** no fastmode with xtxonly!\n") ; 
+    fastmode = NO ;
+  }
+
+  if (xonly) {
+    printf ("xonly mode: will write X matrix and exit\n");
+    numeigs = 0;
+    numoutliter = 1;  // At least one iteration to compute X
+    numoutiter = 1;   // Only one iteration, no outlier removal
+    outputname = NULL;
+    snpeigname = NULL;
+    if (fastmode) printf("*** no fastmode with xonly!\n") ; 
+    fastmode = NO ;
+  }
+
   if (fancynorm)
     printf ("norm used\n\n");
   else
@@ -992,6 +1022,11 @@ main (int argc, char **argv)
 
   ZALLOC (XTX, nrows * nrows, double);
   ZALLOC (evecs, nrows * nrows, double);
+  double *X = NULL;  // X matrix (nrows × ncols)
+  if (xonly || (xoutname != NULL)) {
+    ZALLOC (X, nrows * ncols, double);
+    vzero (X, nrows * ncols);
+  }
   if ((!usepopsformissing) && (ldregress == 0)) {
     // should not use lookup table if
     // - usepopsformissing is set (since each population may have a different
@@ -1171,6 +1206,13 @@ main (int argc, char **argv)
         else
           ++ynumsnps;
         copyarr (cc, tblock + xblock * nrows, nrows);
+
+        // Store column i in X matrix (if X output requested)
+        if (X != NULL) {
+          for (j = 0; j < nrows; j++) {
+            X[j * ncols + i] = cc[j];  // X[row][col] = X[j * ncols + i]
+          }
+        }
       }
       else {
         getcolxz_binary2 (binary_rawcol, binary_cols, binary_mmask,
@@ -1180,6 +1222,14 @@ main (int argc, char **argv)
         }
         ++ynumsnps;
         copyarr (cc, &(tblock[xblock * 3]), 3);
+
+        // Store column i in X matrix (if X output requested)
+        // Note: In binary mode, cc may not contain all values, but we store what we have
+        if (X != NULL) {
+          for (j = 0; j < nrows; j++) {
+            X[j * ncols + i] = cc[j];  // X[row][col] = X[j * ncols + i]
+          }
+        }
       }
 
       ++xblock;
@@ -1297,6 +1347,27 @@ main (int argc, char **argv)
   dumpgrm (XTX, xindex, nrows, ynumsnps, indivmarkers, numindivs, grmoutname);
   if (grmoutname != NULL)
     printf ("grm dumped\n");
+
+  dumpxtx (XTX, xindex, nrows, indivmarkers, numindivs, xtxoutname);
+
+  dumpx (X, xindex, nrows, ncols, indivmarkers, xsnplist, xoutname);
+
+  // If xonly mode, exit after writing X matrix
+  if (xonly) {
+    if (X != NULL) free(X);
+    ymem = calcmem(1)/1.0e6 ;
+    printf("##end of smartpca (xonly mode): %12.3f seconds cpu %12.3f Mbytes in use\n", 
+           cputime(1), ymem);
+    return 0;
+  }
+
+  // If xtxonly mode, exit after writing XTX matrix
+  if (xtxonly) {
+    ymem = calcmem(1)/1.0e6 ;
+    printf("##end of smartpca (xtxonly mode): %12.3f seconds cpu %12.3f Mbytes in use\n", 
+           cputime(1), ymem);
+    return 0;
+  }
 
   t = nrows - numeigs ;     
   if (t <= 10) {
@@ -2047,7 +2118,7 @@ main (int argc, char **argv)
 
    ymem = calcmem(1)/1.0e6 ;
    printf("##end of smartpca: %12.3f seconds cpu %12.3f Mbytes in use\n", cputime(1), ymem) ;
-
+  if (X != NULL) free(X);
   return 0;
 }
 
@@ -2170,6 +2241,10 @@ readcommands (int argc, char **argv)
   getint (ph, "checksizemode:", &checksizemode);
   getint (ph, "pubmean:", &pubmean);
   getint (ph, "fstonly:", &fstonly);
+  getint (ph, "xtxonly:", &xtxonly);
+  getint (ph, "wrtxtxonly:", &xtxonly);  // Alternative parameter name
+  getint (ph, "xonly:", &xonly);
+  getint (ph, "wrtxonly:", &xonly);  // Alternative parameter name
   getint (ph, "fsthiprecision:", &fsthiprec);
   getint (ph, "fstjack:", &fstjack);
 
@@ -2210,6 +2285,8 @@ readcommands (int argc, char **argv)
   getint (ph, "outputgroup:", &ogmode);
   getstring (ph, "grmoutname:", &grmoutname);
   getint (ph, "grmbinary:", &grmbinary);
+  getstring (ph, "xtxoutname:", &xtxoutname);
+  getstring (ph, "xoutname:", &xoutname);
   getint (ph, "packout:", &packout);    /* now obsolete 11/02/06 */
   getstring (ph, "twxtabname:", &twxtabname);
   getstring (ph, "id2pops:", &id2pops);
@@ -3805,6 +3882,80 @@ dumpgrm (double *XTX, int *xindex, int nrows, int numsnps,
   }
   fclose (fff);
 
+}
+
+void
+dumpxtx (double *XTX, int *xindex, int nrows, Indiv ** indivmarkers,
+         int numindivs, char *xtxoutname)
+{
+  int a, b;
+  FILE *fff;
+  Indiv *indx_a, *indx_b;
+
+  if (xtxoutname == NULL)
+    return;
+
+  openit (xtxoutname, &fff, "w");
+
+  // Header row: Write individual IDs as first row
+  fprintf (fff, "ID");
+  for (b = 0; b < nrows; b++) {
+    indx_b = indivmarkers[xindex[b]];
+    fprintf (fff, ",%s", indx_b->ID);
+  }
+  fprintf (fff, "\n");
+
+  // Matrix data: Each row starts with individual ID
+  for (a = 0; a < nrows; a++) {
+    indx_a = indivmarkers[xindex[a]];
+    fprintf (fff, "%s", indx_a->ID);
+    for (b = 0; b < nrows; b++) {
+      fprintf (fff, ",%.10f", XTX[a * nrows + b]);
+    }
+    fprintf (fff, "\n");
+  }
+
+  fclose (fff);
+  printf ("XTX matrix written to %s\n", xtxoutname);
+}
+
+void
+dumpx (double *X, int *xindex, int nrows, int ncols, 
+       Indiv ** indivmarkers, SNP ** xsnplist, char *xoutname)
+{
+  int i, j;
+  FILE *fff;
+  Indiv *indx;
+  SNP *cupt;
+
+  if (xoutname == NULL)
+    return;
+
+  if (X == NULL)
+    return;
+
+  openit (xoutname, &fff, "w");
+
+  // Header row: Write SNP IDs as first row
+  fprintf (fff, "ID");
+  for (j = 0; j < ncols; j++) {
+    cupt = xsnplist[j];
+    fprintf (fff, ",%s", cupt->ID);
+  }
+  fprintf (fff, "\n");
+
+  // Matrix data: Each row is an individual, columns are SNPs
+  for (i = 0; i < nrows; i++) {
+    indx = indivmarkers[xindex[i]];
+    fprintf (fff, "%s", indx->ID);
+    for (j = 0; j < ncols; j++) {
+      fprintf (fff, ",%.10f", X[i * ncols + j]);
+    }
+    fprintf (fff, "\n");
+  }
+
+  fclose (fff);
+  printf ("X matrix written to %s\n", xoutname);
 }
 
 void

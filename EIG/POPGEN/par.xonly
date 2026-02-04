@@ -1,0 +1,11 @@
+genotypename:    ../CONVERTF/example.ped
+snpname:         ../CONVERTF/example.map
+indivname:       ../CONVERTF/example.ped
+evecoutname:     example.evec
+evaloutname:     example.eval
+altnormstyle:    NO 
+numoutevec:      2
+familynames:     NO
+grmoutname:      grmjunk
+xonly:           YES
+xoutname:        example.x.csv

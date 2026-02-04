@@ -1,6 +1,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <math.h>
 // #include <openssl/md2.h>
 #include "admutils.h"
 
@@ -537,7 +538,7 @@ testnan (double *a, int n)
   int i;
 
   for (i = 0; i < n; i++) {
-    if (!finite (a[i]))
+    if (!isfinite (a[i]))
       fatalx ("(testnan) fails:  index %d\n", i);
   }
 }

@@ -1,10 +1,11 @@
-override CFLAGS += -I../include -I/opt/homebrew/include -I/opt/homebrew/opt/lapack/include -I/opt/homebrew/opt/openblas/include
+override CFLAGS += -I../include -I/usr/include/openblas
 #LDLIBS += -lgsl -lopenblas -lrt -lm
-override LDLIBS += -lgsl -lopenblas -llapacke -lm -lpthread
+override LDLIBS += -lgsl -lopenblas -lm -lpthread
 # Some Linux distributions require separate lapacke library
 # override LDLIBS += -llapacke
 # Mac additions using homebrew installations
-override LDFLAGS += -L/opt/homebrew/lib -L/opt/homebrew/opt/lapack/lib -L/opt/homebrew/opt/openblas/lib
+override CFLAGS += -I/opt/homebrew/include -I/usr/local/opt/gsl/include
+override LDFLAGS += -L/opt/homebrew/lib -L/usr/local/opt/gsl/lib
 # Harvard Medical School O2 cluster additions
 ifdef SLURM_CONF
 override CFLAGS += -I/n/app/openblas/0.2.19/include -I/n/app/gsl/2.3/include
