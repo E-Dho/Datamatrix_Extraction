@@ -1,0 +1,47 @@
+# Test files and test results
+test_*
+*_test.*
+sparsity_test.*
+test_sparse.*
+test_csv.*
+
+# Output files from test runs
+*.sparse
+*.ind
+*.snp
+*.info
+*_X.csv
+*_XTX.csv
+
+# Log files
+*.log
+
+# Parameter files for testing
+*_test.par
+test_*.par
+
+# Temporary and system files
+.DS_Store
+*.swp
+*.swo
+*~
+.*.sw?
+
+# Build artifacts (if any)
+*.o
+*.a
+
+# Python cache (if any Python scripts are added)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-*
+
+# Keep example files from EIG package
+!EIG/**/example.*
+!EIG/**/*.par.example
