@@ -149,7 +149,7 @@ megaoutname added (mega output)
 
 #define MAXFL  50
 #define MAXSTR  512
-#define MAXPOPS 1000
+#define MAXPOPS 5000
 
 char *parname = NULL;
 char *twxtabname = NULL;
@@ -179,6 +179,9 @@ int noxdata = YES;              /* default as pop structure dubious if Males and
 int fstonly = NO;
 int xtxonly = NO;              // If YES, only write XTX matrix and exit
 int xonly = NO;                // If YES, only write X matrix and exit
+int sparsity_check = NO;       // If YES, analyze sparsity of X matrix after max_cols_for_sparsity columns
+int max_cols_for_sparsity = 1000;  // Number of columns to analyze for sparsity check
+int sparsity_only = NO;        // If YES, exit after sparsity analysis (only if sparsity_check is also YES)
 int fstjack = YES ;
 int pcorrmode = NO;
 int pcpopsonly = YES;
@@ -251,6 +254,7 @@ char *grmoutname = NULL;
 int grmbinary = NO;
 char *xtxoutname = NULL;       // Output file for XTX matrix
 char *xoutname = NULL;         // Output file for X matrix
+char *xoutformat = NULL;       // Output format for X matrix: "csv" or "sparse" (default: "csv")
 double blgsize = 0.05;          // block size in Morgans */
 char *id2pops = NULL;
 char *elllistname = NULL ; 
@@ -394,6 +398,11 @@ void dumpxtx (double *XTX, int *xindex, int nrows, Indiv ** indivmarkers,
               int numindivs, char *xtxoutname);
 void dumpx (double *X, int *xindex, int nrows, int ncols, 
             Indiv ** indivmarkers, SNP ** xsnplist, char *xoutname);
+void dumpx_sparse (double *X, int *xindex, int nrows, int ncols,
+                   Indiv ** indivmarkers, SNP ** xsnplist, char *xoutname,
+                   double epsilon);
+void analyze_sparsity_partial (double *X, int nrows, int ncols_analyzed, 
+                                int ncols_total, double epsilon);
 
 void printevecs (SNP ** snpmarkers, Indiv ** indivmarkers, Indiv ** xindlist,
                  int numindivs, int ncols, int nrows,
@@ -741,6 +750,14 @@ main (int argc, char **argv)
     fastmode = NO ;
   }
 
+  if (sparsity_check) {
+    printf ("sparsity_check mode: will analyze sparsity after %d columns\n", 
+            max_cols_for_sparsity);
+    if (sparsity_only) {
+      printf ("sparsity_only mode: will exit after sparsity analysis\n");
+    }
+  }
+
   if (fancynorm)
     printf ("norm used\n\n");
   else
@@ -1023,9 +1040,20 @@ main (int argc, char **argv)
   ZALLOC (XTX, nrows * nrows, double);
   ZALLOC (evecs, nrows * nrows, double);
   double *X = NULL;  // X matrix (nrows × ncols)
+  int x_cols = ncols;  // Number of columns to allocate for X
+  // If sparsity_only is set, only allocate for max_cols_for_sparsity columns
+  if (sparsity_only && sparsity_check) {
+    x_cols = MIN(ncols, max_cols_for_sparsity);
+    printf("sparsity_only mode: allocating X matrix for %d columns only (instead of %d)\n", 
+           x_cols, ncols);
+  }
+  // Set default format to "csv" if not specified
+  if (xoutformat == NULL && (xonly || (xoutname != NULL))) {
+    xoutformat = "csv";
+  }
   if (xonly || (xoutname != NULL)) {
-    ZALLOC (X, nrows * ncols, double);
-    vzero (X, nrows * ncols);
+    ZALLOC (X, nrows * x_cols, double);
+    vzero (X, nrows * x_cols);
   }
   if ((!usepopsformissing) && (ldregress == 0)) {
     // should not use lookup table if
@@ -1208,9 +1236,9 @@ main (int argc, char **argv)
         copyarr (cc, tblock + xblock * nrows, nrows);
 
         // Store column i in X matrix (if X output requested)
-        if (X != NULL) {
+        if (X != NULL && i < x_cols) {
           for (j = 0; j < nrows; j++) {
-            X[j * ncols + i] = cc[j];  // X[row][col] = X[j * ncols + i]
+            X[j * x_cols + i] = cc[j];  // X[row][col] = X[j * x_cols + i]
           }
         }
       }
@@ -1225,10 +1253,24 @@ main (int argc, char **argv)
 
         // Store column i in X matrix (if X output requested)
         // Note: In binary mode, cc may not contain all values, but we store what we have
-        if (X != NULL) {
+        if (X != NULL && i < x_cols) {
           for (j = 0; j < nrows; j++) {
-            X[j * ncols + i] = cc[j];  // X[row][col] = X[j * ncols + i]
+            X[j * x_cols + i] = cc[j];  // X[row][col] = X[j * x_cols + i]
           }
+        }
+      }
+
+      // Sparsity check: analyze after max_cols_for_sparsity columns
+      if (sparsity_check && X != NULL && (i + 1) == max_cols_for_sparsity) {
+        analyze_sparsity_partial (X, nrows, i + 1, x_cols, 1e-10);
+        // If sparsity_only is set, exit after analysis
+        if (sparsity_only) {
+          printf ("sparsity_only mode: exiting after sparsity analysis\n");
+          if (X != NULL) free(X);
+          ymem = calcmem(1)/1.0e6;
+          printf("##end of smartpca (sparsity_only mode): %12.3f seconds cpu %12.3f Mbytes in use\n", 
+                 cputime(1), ymem);
+          return 0;
         }
       }
 
@@ -1350,7 +1392,15 @@ main (int argc, char **argv)
 
   dumpxtx (XTX, xindex, nrows, indivmarkers, numindivs, xtxoutname);
 
-  dumpx (X, xindex, nrows, ncols, indivmarkers, xsnplist, xoutname);
+  // Write X matrix in requested format
+  if (xoutname != NULL && X != NULL) {
+    if (xoutformat != NULL && strcmp (xoutformat, "sparse") == 0) {
+      dumpx_sparse (X, xindex, nrows, ncols, indivmarkers, xsnplist, xoutname, 1e-10);
+    }
+    else {
+      dumpx (X, xindex, nrows, ncols, indivmarkers, xsnplist, xoutname);
+    }
+  }
 
   // If xonly mode, exit after writing X matrix
   if (xonly) {
@@ -2245,6 +2295,9 @@ readcommands (int argc, char **argv)
   getint (ph, "wrtxtxonly:", &xtxonly);  // Alternative parameter name
   getint (ph, "xonly:", &xonly);
   getint (ph, "wrtxonly:", &xonly);  // Alternative parameter name
+  getint (ph, "sparsity_check:", &sparsity_check);
+  getint (ph, "max_cols_for_sparsity:", &max_cols_for_sparsity);
+  getint (ph, "sparsity_only:", &sparsity_only);
   getint (ph, "fsthiprecision:", &fsthiprec);
   getint (ph, "fstjack:", &fstjack);
 
@@ -2287,6 +2340,7 @@ readcommands (int argc, char **argv)
   getint (ph, "grmbinary:", &grmbinary);
   getstring (ph, "xtxoutname:", &xtxoutname);
   getstring (ph, "xoutname:", &xoutname);
+  getstring (ph, "xoutformat:", &xoutformat);
   getint (ph, "packout:", &packout);    /* now obsolete 11/02/06 */
   getstring (ph, "twxtabname:", &twxtabname);
   getstring (ph, "id2pops:", &id2pops);
@@ -3956,6 +4010,206 @@ dumpx (double *X, int *xindex, int nrows, int ncols,
 
   fclose (fff);
   printf ("X matrix written to %s\n", xoutname);
+}
+
+void
+dumpx_sparse (double *X, int *xindex, int nrows, int ncols,
+              Indiv ** indivmarkers, SNP ** xsnplist, char *xoutname,
+              double epsilon)
+{
+  int i, j;
+  FILE *fff;
+  FILE *fff_ind, *fff_snp, *fff_info;
+  Indiv *indx;
+  SNP *cupt;
+  char sss[512];
+  int nnz = 0;  // number of non-zeros
+  double val;
+
+  if (xoutname == NULL)
+    return;
+
+  if (X == NULL)
+    return;
+
+  // Open main sparse matrix file
+  sprintf (sss, "%s.sparse", xoutname);
+  openit (sss, &fff, "w");
+
+  // Open metadata files
+  sprintf (sss, "%s.ind", xoutname);
+  openit (sss, &fff_ind, "w");
+
+  sprintf (sss, "%s.snp", xoutname);
+  openit (sss, &fff_snp, "w");
+
+  sprintf (sss, "%s.info", xoutname);
+  openit (sss, &fff_info, "w");
+
+  // Write individual IDs (metadata)
+  for (i = 0; i < nrows; i++) {
+    indx = indivmarkers[xindex[i]];
+    fprintf (fff_ind, "%s\n", indx->ID);
+  }
+
+  // Write SNP IDs (metadata)
+  for (j = 0; j < ncols; j++) {
+    cupt = xsnplist[j];
+    fprintf (fff_snp, "%s\n", cupt->ID);
+  }
+
+  // Write sparse matrix (COO format: row col value)
+  for (i = 0; i < nrows; i++) {
+    for (j = 0; j < ncols; j++) {
+      val = X[i * ncols + j];
+      if (fabs (val) >= epsilon) {
+        fprintf (fff, "%d %d %.10f\n", i, j, val);
+        nnz++;
+      }
+    }
+  }
+
+  // Write info file with header information
+  fprintf (fff_info, "format: COO\n");
+  fprintf (fff_info, "nrows: %d\n", nrows);
+  fprintf (fff_info, "ncols: %d\n", ncols);
+  fprintf (fff_info, "nnz: %d\n", nnz);
+  fprintf (fff_info, "epsilon: %.1e\n", epsilon);
+  fprintf (fff_info, "sparsity: %.4f%%\n", 
+           100.0 * (1.0 - (double)nnz / (double)(nrows * ncols)));
+
+  fclose (fff);
+  fclose (fff_ind);
+  fclose (fff_snp);
+  fclose (fff_info);
+
+  printf ("X matrix (sparse) written to %s.sparse\n", xoutname);
+  printf ("  Metadata: %s.ind, %s.snp, %s.info\n", xoutname, xoutname, xoutname);
+  printf ("  Non-zero elements: %d (%.4f%% of %d total)\n", 
+          nnz, 100.0 * nnz / (double)(nrows * ncols), nrows * ncols);
+}
+
+void
+analyze_sparsity_partial (double *X, int nrows, int ncols_analyzed, 
+                           int ncols_total, double epsilon)
+{
+  int i, j;
+  int total_elements;
+  int exact_zeros = 0;
+  int near_zeros = 0;
+  int non_zeros = 0;
+  double val;
+  double abs_val;
+  double min_val = 1e10;
+  double max_val = -1e10;
+  double sum_nonzero = 0.0;
+  double sparsity_ratio;
+  double estimated_sparsity_full;
+  
+  // Counters for value distribution
+  int range_neg_large = 0;  // < -0.1
+  int range_neg_small = 0;  // [-0.1, -epsilon)
+  int range_near_zero = 0;  // [-epsilon, epsilon]
+  int range_pos_small = 0;  // (epsilon, 0.1]
+  int range_pos_large = 0;  // > 0.1
+
+  if (X == NULL) {
+    printf ("*** Error: X matrix is NULL in analyze_sparsity_partial\n");
+    return;
+  }
+
+  total_elements = nrows * ncols_analyzed;
+
+  printf ("\n=== Sparsity Analysis (Partial) ===\n");
+  printf ("Analyzing first %d columns (of %d total) for sparsity...\n", 
+          ncols_analyzed, ncols_total);
+  printf ("Total elements analyzed: %d (rows: %d, cols: %d)\n", 
+          total_elements, nrows, ncols_analyzed);
+
+  // Iterate over all analyzed elements
+  for (i = 0; i < nrows; i++) {
+    for (j = 0; j < ncols_analyzed; j++) {
+      val = X[i * ncols_total + j];
+      abs_val = fabs (val);
+
+      // Count exact zeros
+      if (val == 0.0) {
+        exact_zeros++;
+        range_near_zero++;
+      }
+      // Count near zeros
+      else if (abs_val < epsilon) {
+        near_zeros++;
+        range_near_zero++;
+      }
+      // Count non-zeros and track statistics
+      else {
+        non_zeros++;
+        if (val < min_val)
+          min_val = val;
+        if (val > max_val)
+          max_val = val;
+        sum_nonzero += val;
+
+        // Distribution ranges
+        if (val < -0.1)
+          range_neg_large++;
+        else if (val < -epsilon)
+          range_neg_small++;
+        else if (val <= epsilon)
+          range_near_zero++;
+        else if (val <= 0.1)
+          range_pos_small++;
+        else
+          range_pos_large++;
+      }
+    }
+  }
+
+  // Calculate sparsity ratio
+  sparsity_ratio = (double)(exact_zeros + near_zeros) / (double)total_elements;
+  estimated_sparsity_full = sparsity_ratio;  // Assume same ratio for full matrix
+
+  // Print results
+  printf ("\n--- Sparsity Statistics ---\n");
+  printf ("Exact zeros (== 0.0):           %d (%.2f%%)\n", 
+          exact_zeros, 100.0 * exact_zeros / total_elements);
+  printf ("Near zeros (|x| < %.1e):        %d (%.2f%%)\n", 
+          epsilon, near_zeros, 100.0 * near_zeros / total_elements);
+  printf ("Total zeros (exact + near):     %d (%.2f%%)\n", 
+          exact_zeros + near_zeros, 100.0 * sparsity_ratio);
+  printf ("Non-zero values:                %d (%.2f%%)\n", 
+          non_zeros, 100.0 * non_zeros / total_elements);
+  printf ("\nSparsity Ratio:                 %.4f (%.2f%% sparse)\n", 
+          sparsity_ratio, 100.0 * sparsity_ratio);
+
+  if (non_zeros > 0) {
+    printf ("\n--- Non-Zero Value Statistics ---\n");
+    printf ("Minimum non-zero value:        %.10f\n", min_val);
+    printf ("Maximum non-zero value:        %.10f\n", max_val);
+    printf ("Average non-zero value:        %.10f\n", sum_nonzero / non_zeros);
+  }
+
+  printf ("\n--- Value Distribution ---\n");
+  printf ("Values < -0.1:                  %d (%.2f%%)\n", 
+          range_neg_large, 100.0 * range_neg_large / total_elements);
+  printf ("Values [-0.1, -%.1e):           %d (%.2f%%)\n", 
+          epsilon, range_neg_small, 100.0 * range_neg_small / total_elements);
+  printf ("Values [-%.1e, %.1e]:          %d (%.2f%%)\n", 
+          epsilon, epsilon, range_near_zero, 100.0 * range_near_zero / total_elements);
+  printf ("Values (%.1e, 0.1]:            %d (%.2f%%)\n", 
+          epsilon, range_pos_small, 100.0 * range_pos_small / total_elements);
+  printf ("Values > 0.1:                   %d (%.2f%%)\n", 
+          range_pos_large, 100.0 * range_pos_large / total_elements);
+
+  printf ("\n--- Estimated Full Matrix Statistics ---\n");
+  printf ("Estimated total elements:       %d\n", nrows * ncols_total);
+  printf ("Estimated non-zero elements:    %.0f\n", 
+          (1.0 - estimated_sparsity_full) * nrows * ncols_total);
+  printf ("Estimated zero elements:        %.0f\n", 
+          estimated_sparsity_full * nrows * ncols_total);
+
+  printf ("\n=== End of Sparsity Analysis ===\n\n");
 }
 
 void
